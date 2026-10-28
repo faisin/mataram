@@ -12,6 +12,25 @@ orange='\e[0;33m'
 NC='\e[0m'
 export Server_URL="raw.githubusercontent.com/faisin/mataram/main"
 
+install_account_script() {
+  local name="$1" source_dir="${MATARAM_SOURCE_DIR:-/opt/mataram/source}/accounts" tmp
+  if [[ -s "$source_dir/$name.sh" ]]; then
+    install -m 0755 "$source_dir/$name.sh" "/root/$name"
+  else
+    tmp="$(mktemp "/root/.${name}.XXXXXX")" || return 1
+    if ! curl -fL --retry 3 --connect-timeout 10 --max-time 60 \
+      "https://${Server_URL}/accounts/${name}.sh" -o "$tmp" || [[ ! -s "$tmp" ]]; then
+      rm -f -- "$tmp"
+      echo "ERROR: gagal mengunduh atau file kosong: accounts/${name}.sh" >&2
+      return 1
+    fi
+    chmod 0755 "$tmp"
+    mv -f -- "$tmp" "/root/$name"
+  fi
+  [[ -s "/root/$name" ]] || { echo "ERROR: file akun kosong: /root/$name" >&2; return 1; }
+}
+
+cd /root
 clear
 dateFromServer=$(curl -v --insecure --silent https://google.com/ 2>&1 | grep Date | sed -e 's/< Date: //')
 biji=`date +"%Y-%m-%d" -d "$dateFromServer"`
@@ -46,13 +65,24 @@ domain="$(cat /etc/mataram/domain 2>/dev/null || true)"
 sleep 1
 echo -e "[ ${green}INFO${NC} ] XRAY Core Installation Begin . . . "
 # Stop immediately if repository metadata or required packages cannot be downloaded.
-if ! apt-get update; then
-  echo "ERROR: apt-get update gagal. Periksa DNS dan repository Debian/Ubuntu." >&2
+apt_update_with_retry() {
+  local attempt
+  for attempt in 1 2 3; do
+    echo "Memperbarui indeks APT (percobaan $attempt/3)..."
+    if apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update; then
+      return 0
+    fi
+    [[ "$attempt" -eq 3 ]] || sleep $((attempt * 3))
+  done
+  return 1
+}
+if ! apt_update_with_retry; then
+  echo "ERROR: apt-get update gagal setelah 3 percobaan. Periksa DNS, koneksi, dan repository Debian/Ubuntu." >&2
   exit 1
 fi
 if ! DEBIAN_FRONTEND=noninteractive apt-get install -y \
   socat python3 curl wget sed nano xz-utils apt-transport-https gnupg \
-  dnsutils lsb-release cron bash-completion chrony zip pwgen openssl netcat-openbsd; then
+  dnsutils lsb-release cron bash-completion chrony zip unzip pwgen openssl netcat-openbsd; then
   echo "ERROR: paket dependensi gagal dipasang. Periksa koneksi dan repository." >&2
   exit 1
 fi
@@ -78,32 +108,45 @@ chmod +x /var/log/xray
 # Make Folder XRAY
 mkdir -p /usr/local/etc/xray
 
-# Xray core is downloaded from the project repository below.
-
-# Download Xray ke berkas sementara; jangan menimpa executable yang sedang dipakai.
-XRAY_TMP="$(mktemp /usr/local/bin/xray.new.XXXXXX)" || {
-  echo "ERROR: tidak dapat membuat berkas sementara untuk Xray." >&2
+# Download the latest official Xray-core Linux amd64 release into a staging directory.
+# Never write over the executable currently used by a running Xray process.
+XRAY_STAGE="$(mktemp -d /tmp/mataram-xray.XXXXXX)" || {
+  echo "ERROR: tidak dapat membuat direktori sementara Xray." >&2
   exit 1
 }
-if ! curl -fL --retry 3 --connect-timeout 10 --max-time 180 \
-  "https://raw.githubusercontent.com/faisin/mataram/main/tools/xray.linux.64bit" \
-  -o "$XRAY_TMP"; then
-  rm -f -- "$XRAY_TMP"
-  echo "ERROR: gagal mengunduh Xray dari repositori Mataram (tools/xray.linux.64bit)." >&2
+XRAY_ARCHIVE="$XRAY_STAGE/Xray-linux-64.zip"
+XRAY_TMP="$XRAY_STAGE/xray"
+XRAY_RELEASE_URL="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
+if ! curl -fL --retry 3 --retry-all-errors --connect-timeout 15 --max-time 300 \
+  "$XRAY_RELEASE_URL" -o "$XRAY_ARCHIVE"; then
+  rm -rf -- "$XRAY_STAGE"
+  echo "ERROR: gagal mengunduh rilis terbaru Xray-core resmi." >&2
+  exit 1
+fi
+if ! unzip -tq "$XRAY_ARCHIVE" >/dev/null 2>&1 || ! unzip -Z1 "$XRAY_ARCHIVE" | grep -Fxq 'xray'; then
+  rm -rf -- "$XRAY_STAGE"
+  echo "ERROR: arsip rilis Xray tidak valid atau tidak berisi binary xray." >&2
+  exit 1
+fi
+if ! unzip -p "$XRAY_ARCHIVE" xray > "$XRAY_TMP"; then
+  rm -rf -- "$XRAY_STAGE"
+  echo "ERROR: gagal mengekstrak binary Xray." >&2
   exit 1
 fi
 chmod 0755 "$XRAY_TMP"
 if ! "$XRAY_TMP" version >/dev/null 2>&1; then
-  rm -f -- "$XRAY_TMP"
-  echo "ERROR: berkas Xray yang diunduh tidak valid atau tidak dapat dijalankan." >&2
+  rm -rf -- "$XRAY_STAGE"
+  echo "ERROR: binary Xray dari rilis upstream tidak valid atau tidak dapat dijalankan." >&2
   exit 1
 fi
-# Atomic rename avoids ETXTBSY (Text file busy) when old Xray is running.
+XRAY_VERSION="$("$XRAY_TMP" version 2>&1 | head -n 1)"
+echo "[ INFO ] Xray-core upstream: $XRAY_VERSION"
 if ! mv -f -- "$XRAY_TMP" /usr/local/bin/xray; then
-  rm -f -- "$XRAY_TMP"
+  rm -rf -- "$XRAY_STAGE"
   echo "ERROR: gagal memasang binary Xray baru." >&2
   exit 1
 fi
+rm -rf -- "$XRAY_STAGE"
 
 # Issue and install the certificate only after domain/DNS/port validation.
 DOMAIN_HELPER="${MATARAM_SOURCE_DIR:-/opt/mataram/source}/domain/issue-certificate.sh"
@@ -1177,54 +1220,54 @@ cd /usr/bin
 # // VMESS WS FILES
 echo -e "[ ${green}INFO${NC} ] Downloading Vmess WS Files"
 sleep 1
-wget -O add-ws "https://${Server_URL}/accounts/add-ws.sh" && chmod +x add-ws
-wget -O cek-ws "https://${Server_URL}/accounts/cek-ws.sh" && chmod +x cek-ws
-wget -O del-ws "https://${Server_URL}/accounts/del-ws.sh" && chmod +x del-ws
-wget -O renew-ws "https://${Server_URL}/accounts/renew-ws.sh" && chmod +x renew-ws
-wget -O user-ws "https://${Server_URL}/accounts/user-ws.sh" && chmod +x user-ws
-wget -O trial-ws "https://${Server_URL}/accounts/trial-ws.sh" && chmod +x trial-ws
+install_account_script add-ws || exit 1
+install_account_script cek-ws || exit 1
+install_account_script del-ws || exit 1
+install_account_script renew-ws || exit 1
+install_account_script user-ws || exit 1
+install_account_script trial-ws || exit 1
 
 # // VLESS WS FILES
 echo -e "[ ${green}INFO${NC} ] Downloading Vless WS Files"
 sleep 1
-wget -O add-vless "https://${Server_URL}/accounts/add-vless.sh" && chmod +x add-vless
-wget -O cek-vless "https://${Server_URL}/accounts/cek-vless.sh" && chmod +x cek-vless
-wget -O del-vless "https://${Server_URL}/accounts/del-vless.sh" && chmod +x del-vless
-wget -O renew-vless "https://${Server_URL}/accounts/renew-vless.sh" && chmod +x renew-vless
-wget -O user-vless "https://${Server_URL}/accounts/user-vless.sh" && chmod +x user-vless
-wget -O trial-vless "https://${Server_URL}/accounts/trial-vless.sh" && chmod +x trial-vless
+install_account_script add-vless || exit 1
+install_account_script cek-vless || exit 1
+install_account_script del-vless || exit 1
+install_account_script renew-vless || exit 1
+install_account_script user-vless || exit 1
+install_account_script trial-vless || exit 1
 
 # // TROJAN WS FILES
 echo -e "[ ${green}INFO${NC} ] Downloading Trojan WS Files"
 sleep 1
-wget -O add-tr "https://${Server_URL}/accounts/add-tr.sh" && chmod +x add-tr
-wget -O cek-tr "https://${Server_URL}/accounts/cek-tr.sh" && chmod +x cek-tr
-wget -O del-tr "https://${Server_URL}/accounts/del-tr.sh" && chmod +x del-tr
-wget -O renew-tr "https://${Server_URL}/accounts/renew-tr.sh" && chmod +x renew-tr
-wget -O user-tr "https://${Server_URL}/accounts/user-tr.sh" && chmod +x user-tr
-wget -O trial-tr "https://${Server_URL}/accounts/trial-tr.sh" && chmod +x trial-tr
+install_account_script add-tr || exit 1
+install_account_script cek-tr || exit 1
+install_account_script del-tr || exit 1
+install_account_script renew-tr || exit 1
+install_account_script user-tr || exit 1
+install_account_script trial-tr || exit 1
 
 # // TROJAN TCP XTLS
 echo -e "[ ${green}INFO${NC} ] Downloading XRAY Vless TCP XTLS Files"
 sleep 1
-wget -O add-xrt "https://${Server_URL}/accounts/add-xrt.sh" && chmod +x add-xrt
-wget -O cek-xrt "https://${Server_URL}/accounts/cek-xrt.sh" && chmod +x cek-xrt
-wget -O del-xrt "https://${Server_URL}/accounts/del-xrt.sh" && chmod +x del-xrt
-wget -O renew-xrt "https://${Server_URL}/accounts/renew-xrt.sh" && chmod +x renew-xrt
-wget -O user-xrt "https://${Server_URL}/accounts/user-xrt.sh" && chmod +x user-xrt
-wget -O trial-xrt "https://${Server_URL}/accounts/trial-xrt.sh" && chmod +x trial-xrt
+install_account_script add-xrt || exit 1
+install_account_script cek-xrt || exit 1
+install_account_script del-xrt || exit 1
+install_account_script renew-xrt || exit 1
+install_account_script user-xrt || exit 1
+install_account_script trial-xrt || exit 1
 
 # // TROJAN TCP FILES
 echo -e "[ ${green}INFO${NC} ] Downloading Trojan TCP Files"
 sleep 1
-wget -O add-xtr "https://${Server_URL}/accounts/add-xtr.sh" && chmod +x add-xtr
-wget -O cek-xtr "https://${Server_URL}/accounts/cek-xtr.sh" && chmod +x cek-xtr
-wget -O del-xtr "https://${Server_URL}/accounts/del-xtr.sh" && chmod +x del-xtr
-wget -O renew-xtr "https://${Server_URL}/accounts/renew-xtr.sh" && chmod +x renew-xtr
-wget -O user-xtr "https://${Server_URL}/accounts/user-xtr.sh" && chmod +x user-xtr
-wget -O trial-xtr "https://${Server_URL}/accounts/trial-xtr.sh" && chmod +x trial-xtr
+install_account_script add-xtr || exit 1
+install_account_script cek-xtr || exit 1
+install_account_script del-xtr || exit 1
+install_account_script renew-xtr || exit 1
+install_account_script user-xtr || exit 1
+install_account_script trial-xtr || exit 1
 
 # // OTHER FILES
 echo -e "[ ${green}INFO${NC} ] Downloading Others Files"
 sleep 1
-rm -r xray.sh
+# Wrapper script is removed by install/run-install.sh after this process exits.

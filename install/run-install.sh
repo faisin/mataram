@@ -88,8 +88,20 @@ secs_to_human() {
 start=$(date +%s)
 
 echo -e "[ ${green}INFO${NC} ] Preparing the autoscript installation ~"
-apt-get update -y || exit 1
-apt-get install -y git curl wget ca-certificates || exit 1
+apt_update_with_retry() {
+  local attempt
+  for attempt in 1 2 3; do
+    echo "Memperbarui indeks APT (percobaan $attempt/3)..."
+    if apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update; then
+      return 0
+    fi
+    [[ "$attempt" -eq 3 ]] || sleep $((attempt * 3))
+  done
+  echo "ERROR: apt-get update gagal setelah 3 percobaan. Periksa DNS, koneksi, dan repository." >&2
+  return 1
+}
+apt_update_with_retry || exit 1
+apt-get install -y git curl wget ca-certificates unzip || { echo "ERROR: gagal memasang prasyarat installer." >&2; exit 1; }
 echo -e "[ ${green}INFO${NC} ] Installation file is ready to begin !"
 sleep 1
 
@@ -134,6 +146,7 @@ echo -e "\e[0;32mINSTALLING XRAY CORE...\e[0m"
 sleep 3
 fetch_project_file xray.sh /root/xray.sh || { echo "Gagal menyiapkan xray.sh" >&2; exit 1; }
 bash /root/xray.sh || { echo "Instalasi Xray gagal; proses dihentikan." >&2; exit 1; }
+rm -f /root/xray.sh
 echo -e "${GREEN}Done!${NC}"
 sleep 2
 clear

@@ -34,8 +34,20 @@ NC='\e[0m'
 green() { echo -e "\\033[32;1m${*}\\033[0m"; }
 red() { echo -e "\\033[31;1m${*}\\033[0m"; }
 
-apt-get update -y
-apt-get install -y rclone
+apt_update_with_retry() {
+  local attempt
+  for attempt in 1 2 3; do
+    echo "Memperbarui indeks APT (percobaan $attempt/3)..."
+    if apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update; then
+      return 0
+    fi
+    [[ "$attempt" -eq 3 ]] || sleep $((attempt * 3))
+  done
+  echo "ERROR: apt-get update gagal setelah 3 percobaan. Periksa DNS, koneksi, dan repository." >&2
+  exit 1
+}
+apt_update_with_retry
+DEBIAN_FRONTEND=noninteractive apt-get install -y rclone || { echo "ERROR: gagal memasang rclone." >&2; exit 1; }
 printf "q\n" | rclone config
 wget -O /root/.config/rclone/rclone.conf "https://${Server_URL}/assets/rclone.conf"
 git clone  https://github.com/MrMan21/wondershaper.git

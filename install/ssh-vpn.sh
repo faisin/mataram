@@ -91,18 +91,27 @@ systemctl start rc-local.service
 
 # IPv6 is left enabled so domains with a valid AAAA record remain usable.
 
-#update
-apt update -y
-apt upgrade -y
-apt dist-upgrade -y
-apt-get remove --purge ufw firewalld -y
-apt-get remove --purge exim4 -y
+# Refresh package indexes with retries before package operations.
+apt_update_with_retry() {
+  local attempt
+  for attempt in 1 2 3; do
+    echo "Memperbarui indeks APT (percobaan $attempt/3)..."
+    if apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update; then
+      return 0
+    fi
+    [[ "$attempt" -eq 3 ]] || sleep $((attempt * 3))
+  done
+  echo "ERROR: apt-get update gagal setelah 3 percobaan. Periksa DNS, koneksi, dan repository." >&2
+  exit 1
+}
+apt_update_with_retry
+if ! DEBIAN_FRONTEND=noninteractive apt-get install -y wget curl netfilter-persistent; then
+  echo "ERROR: gagal memasang paket dasar SSH-VPN." >&2
+  exit 1
+fi
+# Keep the base OS stable: do not run an unattended full distribution upgrade here.
+# Remove these packages only if the operator explicitly decides they are not needed.
 
-# install wget and curl
-apt -y install wget curl
-
-# install netfilter-persistent
-apt-get install netfilter-persistent
 
 # set time GMT +8
 ln -fs /usr/share/zoneinfo/Asia/Kuala_Lumpur /etc/localtime
