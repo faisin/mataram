@@ -90,10 +90,16 @@ else
   echo 'ERROR: acme.sh tidak ditemukan di sumber Mataram.' >&2
   exit 1
 fi
-"$ACME_BIN" --install --home "$ACME_HOME" --config-home "$ACME_HOME" || {
-  echo 'ERROR: gagal menyiapkan acme.sh.' >&2; exit 1;
+# acme.sh's --install action expects to run from its own directory on some releases.
+# Run it there so it can find/copy its own acme.sh file, and verify the executable first.
+[[ -s "$ACME_BIN" ]] || { echo 'ERROR: berkas acme.sh kosong atau tidak ditemukan.' >&2; exit 1; }
+if ! (cd "$ACME_HOME" && ./acme.sh --install --home "$ACME_HOME" --config-home "$ACME_HOME"); then
+  echo 'ERROR: gagal menyiapkan acme.sh. Periksa isi /root/.acme.sh dan izin berkas.' >&2
+  exit 1
+fi
+"$ACME_BIN" --set-default-ca --server letsencrypt || {
+  echo "ERROR: gagal mengatur Let's Encrypt sebagai CA default." >&2; exit 1;
 }
-"$ACME_BIN" --set-default-ca --server letsencrypt
 
 # ACME hooks stop only services that were active and restore the same state afterward.
 if ! "$ACME_BIN" --issue --server letsencrypt -d "$DOMAIN" --standalone --keylength ec-256 \
