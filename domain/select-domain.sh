@@ -47,8 +47,19 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 if ! command -v dig >/dev/null 2>&1 || ! command -v ip >/dev/null 2>&1; then
-  apt-get update -y
-  apt-get install -y dnsutils iproute2
+  apt_updated=0
+  for attempt in 1 2 3; do
+    echo "Memperbarui indeks APT untuk kebutuhan pemeriksaan DNS (percobaan $attempt/3)..."
+    if apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update; then
+      apt_updated=1
+      break
+    fi
+    [[ "$attempt" -eq 3 ]] || sleep $((attempt * 3))
+  done
+  [[ "$apt_updated" -eq 1 ]] || { echo 'ERROR: apt-get update gagal; tidak dapat memasang dnsutils/iproute2.' >&2; exit 1; }
+  DEBIAN_FRONTEND=noninteractive apt-get install -y dnsutils iproute2 || {
+    echo 'ERROR: gagal memasang dnsutils/iproute2 untuk validasi domain.' >&2; exit 1;
+  }
 fi
 PUBLIC_IPV4="$(curl -4fsS --connect-timeout 8 --max-time 15 https://api.ipify.org)" || {
   echo 'ERROR: tidak dapat mendeteksi IPv4 publik VPS.' >&2; exit 1;
