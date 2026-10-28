@@ -45,26 +45,31 @@ domain="$(cat /etc/mataram/domain 2>/dev/null || true)"
 [[ -n "$domain" ]] || { echo "ERROR: domain Mataram belum dipilih." >&2; exit 1; }
 sleep 1
 echo -e "[ ${green}INFO${NC} ] XRAY Core Installation Begin . . . "
-apt update -y
-apt upgrade -y
-apt install socat -y
-apt install python3 -y
-apt install curl -y
-apt install wget -y
-apt install sed -y
-apt install nano -y
-apt install python3 -y
-apt install curl socat xz-utils wget apt-transport-https gnupg dnsutils lsb-release -y 
-apt install socat cron bash-completion -y
-apt -y install chrony
-timedatectl set-ntp true
-if systemctl list-unit-files chrony.service >/dev/null 2>&1; then systemctl enable --now chrony.service || true; elif systemctl list-unit-files chronyd.service >/dev/null 2>&1; then systemctl enable --now chronyd.service || true; fi
-timedatectl set-timezone Asia/Kuala_Lumpur
-chronyc sourcestats -v
-chronyc tracking -v
+# Stop immediately if repository metadata or required packages cannot be downloaded.
+if ! apt-get update; then
+  echo "ERROR: apt-get update gagal. Periksa DNS dan repository Debian/Ubuntu." >&2
+  exit 1
+fi
+if ! DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  socat python3 curl wget sed nano xz-utils apt-transport-https gnupg \
+  dnsutils lsb-release cron bash-completion chrony zip pwgen openssl netcat-openbsd; then
+  echo "ERROR: paket dependensi gagal dipasang. Periksa koneksi dan repository." >&2
+  exit 1
+fi
+if command -v timedatectl >/dev/null 2>&1; then
+  timedatectl set-ntp true || true
+  timedatectl set-timezone Asia/Kuala_Lumpur || true
+fi
+if systemctl list-unit-files chrony.service >/dev/null 2>&1; then
+  systemctl enable --now chrony.service || true
+elif systemctl list-unit-files chronyd.service >/dev/null 2>&1; then
+  systemctl enable --now chronyd.service || true
+fi
+if command -v chronyc >/dev/null 2>&1; then
+  chronyc sourcestats -v || true
+  chronyc tracking -v || true
+fi
 date
-apt install zip -y
-apt install curl pwgen openssl netcat-openbsd cron -y
 
 # Make Folder Log XRAY
 mkdir -p /var/log/xray
@@ -76,8 +81,18 @@ mkdir -p /usr/local/etc/xray
 # Xray core is downloaded from the project repository below.
 
 #Download XRAY Core Dharak
-wget -O /usr/local/bin/xray "https://raw.githubusercontent.com/faisin/mataram/main/xray.linux.64bit"
-chmod +x /usr/local/bin/xray
+if ! curl -fL --retry 3 --connect-timeout 10 --max-time 180 \
+  "https://raw.githubusercontent.com/faisin/mataram/main/tools/xray.linux.64bit" \
+  -o /usr/local/bin/xray; then
+  echo "ERROR: gagal mengunduh Xray dari repositori Mataram (tools/xray.linux.64bit)." >&2
+  exit 1
+fi
+chmod 0755 /usr/local/bin/xray
+if ! /usr/local/bin/xray version >/dev/null 2>&1; then
+  echo "ERROR: berkas Xray yang diunduh tidak valid atau tidak dapat dijalankan." >&2
+  rm -f /usr/local/bin/xray
+  exit 1
+fi
 
 # Issue and install the certificate only after domain/DNS/port validation.
 DOMAIN_HELPER="${MATARAM_SOURCE_DIR:-/opt/mataram/source}/domain/issue-certificate.sh"
