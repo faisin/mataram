@@ -93,10 +93,13 @@ apt-get install -y git curl wget ca-certificates || exit 1
 echo -e "[ ${green}INFO${NC} ] Installation file is ready to begin !"
 sleep 1
 
-if [[ -f /etc/mataram/install-complete ]] || { [[ -s /usr/local/etc/xray/config.json ]] && systemctl cat xray.service >/dev/null 2>&1; }; then
+if [[ "${MATARAM_FORCE_INSTALL:-0}" != "1" ]] && { [[ -f /etc/mataram/install-complete ]] || { [[ -s /usr/local/etc/xray/config.json ]] && systemctl cat xray.service >/dev/null 2>&1; }; }; then
   echo "Mataram terdeteksi sudah terpasang. Installer dihentikan agar konfigurasi aktif tidak tertimpa."
-  echo "Jika ingin memperbarui, gunakan prosedur update yang disediakan proyek."
+  echo "Untuk melanjutkan instalasi yang sebelumnya gagal, jalankan dengan MATARAM_FORCE_INSTALL=1 setelah memastikan konfigurasi lama boleh ditimpa."
   exit 0
+fi
+if [[ "${MATARAM_FORCE_INSTALL:-0}" == "1" ]]; then
+  echo "PERINGATAN: MATARAM_FORCE_INSTALL aktif; proses instalasi akan diteruskan dan konfigurasi yang ada mungkin berubah."
 fi
 
 mkdir -p /var/lib/premium-script /var/lib/crot-script;
