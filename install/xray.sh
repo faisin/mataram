@@ -80,17 +80,28 @@ mkdir -p /usr/local/etc/xray
 
 # Xray core is downloaded from the project repository below.
 
-#Download XRAY Core Dharak
+# Download Xray ke berkas sementara; jangan menimpa executable yang sedang dipakai.
+XRAY_TMP="$(mktemp /usr/local/bin/xray.new.XXXXXX)" || {
+  echo "ERROR: tidak dapat membuat berkas sementara untuk Xray." >&2
+  exit 1
+}
 if ! curl -fL --retry 3 --connect-timeout 10 --max-time 180 \
   "https://raw.githubusercontent.com/faisin/mataram/main/tools/xray.linux.64bit" \
-  -o /usr/local/bin/xray; then
+  -o "$XRAY_TMP"; then
+  rm -f -- "$XRAY_TMP"
   echo "ERROR: gagal mengunduh Xray dari repositori Mataram (tools/xray.linux.64bit)." >&2
   exit 1
 fi
-chmod 0755 /usr/local/bin/xray
-if ! /usr/local/bin/xray version >/dev/null 2>&1; then
+chmod 0755 "$XRAY_TMP"
+if ! "$XRAY_TMP" version >/dev/null 2>&1; then
+  rm -f -- "$XRAY_TMP"
   echo "ERROR: berkas Xray yang diunduh tidak valid atau tidak dapat dijalankan." >&2
-  rm -f /usr/local/bin/xray
+  exit 1
+fi
+# Atomic rename avoids ETXTBSY (Text file busy) when old Xray is running.
+if ! mv -f -- "$XRAY_TMP" /usr/local/bin/xray; then
+  rm -f -- "$XRAY_TMP"
+  echo "ERROR: gagal memasang binary Xray baru." >&2
   exit 1
 fi
 
@@ -1216,4 +1227,4 @@ wget -O trial-xtr "https://${Server_URL}/accounts/trial-xtr.sh" && chmod +x tria
 # // OTHER FILES
 echo -e "[ ${green}INFO${NC} ] Downloading Others Files"
 sleep 1
-rm -f -- xray.sh
+rm -r xray.sh
