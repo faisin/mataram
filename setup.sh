@@ -16,8 +16,21 @@ esac
 ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m)"
 case "$ARCH" in amd64|x86_64) ;; *) die "Saat ini hanya amd64/x86_64; terdeteksi $ARCH.";; esac
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get install -y ca-certificates curl wget unzip
+apt_update_with_retry() {
+  local attempt
+  for attempt in 1 2 3; do
+    log "Memperbarui indeks APT (percobaan $attempt/3)..."
+    if apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update; then
+      return 0
+    fi
+    [[ "$attempt" -eq 3 ]] || sleep $((attempt * 3))
+  done
+  die 'apt-get update gagal setelah 3 percobaan. Periksa DNS, koneksi, dan repository Debian/Ubuntu.'
+}
+apt_update_with_retry
+if ! apt-get install -y ca-certificates curl wget unzip; then
+  die 'Gagal memasang prasyarat (ca-certificates, curl, wget, unzip).'
+fi
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 log "Mengunduh seluruh repositori ${REPO}/${BRANCH}..."
 curl -fLsS --retry 3 --connect-timeout 15 --max-time 300 "$ARCHIVE_URL" -o "$TMP/repo.zip" || die 'Gagal mengunduh repositori.'
@@ -32,4 +45,4 @@ rm -rf "$NEW"; cp -a "$REPO_DIR" "$NEW"
 if mv "$NEW" "$SOURCE_DIR"; then rm -rf "$OLD"; else [[ ! -e "$OLD" ]] || mv "$OLD" "$SOURCE_DIR"; die 'Gagal memasang source tree.'; fi
 export MATARAM_SOURCE_DIR="$SOURCE_DIR" MATARAM_REPO_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
 log 'Source lengkap tersedia di /opt/mataram/source.'
-exec bash "$SOURCE_DIR/install/run-install.sh" "$@"
+bash "$SOURCE_DIR/install/run-install.sh" "$@"
